@@ -12,16 +12,29 @@ pub const Kind = enum {
 };
 
 pub const Lexed = struct {
+    allocator: Allocator,
     kind: Kind,
     content: []u8,
 
     const Self = @This();
 
-    pub fn string(self: Self, alloc: Allocator) ![]u8 {
+    pub fn init(alloc: Allocator, kind: Kind, content: []u8) Lexed {
+        return Lexed{
+            .allocator = alloc,
+            .kind = kind,
+            .content = content,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.content);
+    }
+
+    pub fn string(self: Self) ![]u8 {
         const kindStr = kindString(self.kind);
         const len = kindStr.len;
         // +2 for ( and )
-        var res = try alloc.alloc(u8, kindStr.len + 2 + self.content.len);
+        var res = try self.allocator.alloc(u8, kindStr.len + 2 + self.content.len);
         for (0..len) |i| res[i] = kindStr[i];
         res[len] = '(';
         for (0..self.content.len) |i| res[i + len + 1] = self.content[i];
@@ -61,7 +74,15 @@ test "lexed string" {
     const allocator = arena.allocator();
 
     const array: [:0]const u8 = "12";
-    const l = Lexed{ .kind = Kind.number_int, .content = try constToVar(allocator, array) };
+    const l = Lexed.init(allocator, Kind.number_int, try constToVar(allocator, array));
+    defer l.deinit();
+
     const expected: [:0]const u8 = "number_int(12)";
-    try expect(stringEq(try l.string(allocator), try constToVar(allocator, expected)));
+    const expected_conv = try constToVar(allocator, expected);
+    defer allocator.free(expected_conv);
+
+    const got = try l.string(allocator);
+    defer allocator.free(got);
+
+    try expect(stringEq(got, try constToVar(allocator, expected)));
 }
