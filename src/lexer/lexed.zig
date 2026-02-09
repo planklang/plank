@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const expect = std.testing.expect;
 
 pub const Kind = enum {
     identifier,
@@ -14,36 +13,39 @@ pub const Kind = enum {
 pub const Lexed = struct {
     allocator: Allocator,
     kind: Kind,
-    content: []u8,
+    content: std.ArrayList(u8),
 
     const Self = @This();
 
-    pub fn init(alloc: Allocator, kind: Kind, content: []u8) Lexed {
-        return Lexed{
+    pub fn init(alloc: Allocator, kind: Kind, content: std.ArrayList(u8)) !*Lexed {
+        const l = try alloc.create(Lexed);
+        l.* = Lexed{
             .allocator = alloc,
             .kind = kind,
             .content = content,
         };
+        return l;
     }
 
     pub fn deinit(self: *Self) void {
-        self.allocator.free(self.content);
+        self.content.deinit(self.allocator);
     }
 
-    pub fn string(self: Self) ![]u8 {
-        const kindStr = kindString(self.kind);
-        const len = kindStr.len;
+    pub fn string(self: Self, alloc: Allocator) Allocator.Error![]u8 {
+        const kind_str = kind_string(self.kind);
+        const kind_len = kind_str.len;
+        const content_len = self.content.items.len;
         // +2 for ( and )
-        var res = try self.allocator.alloc(u8, kindStr.len + 2 + self.content.len);
-        for (0..len) |i| res[i] = kindStr[i];
-        res[len] = '(';
-        for (0..self.content.len) |i| res[i + len + 1] = self.content[i];
+        var res = try alloc.alloc(u8, kind_len + 2 + content_len);
+        for (0..kind_len) |i| res[i] = kind_str[i];
+        res[kind_len] = '(';
+        for (0..content_len) |i| res[i + kind_len + 1] = self.content.items[i];
         res[res.len - 1] = ')';
         return res;
     }
 };
 
-fn kindString(kind: Kind) []const u8 {
+pub fn kind_string(kind: Kind) []const u8 {
     switch (kind) {
         .identifier => return "identifier",
         .number_int => return "number_int",
@@ -54,7 +56,9 @@ fn kindString(kind: Kind) []const u8 {
     }
 }
 
-fn stringEq(s1: []u8, s2: []u8) bool {
+pub fn test_string_eq(alloc: Allocator, s1: []u8, s2: [:0]const u8) bool {
+    const conv = test_const_to_var(alloc, s2) catch return false;
+    defer alloc.free(conv);
     if (s1.len != s2.len) return false;
     for (0..s1.len) |i| {
         if (s1[i] != s2[i]) return false;
@@ -62,27 +66,36 @@ fn stringEq(s1: []u8, s2: []u8) bool {
     return true;
 }
 
-fn constToVar(alloc: Allocator, to: [:0]const u8) ![]u8 {
+pub fn test_const_to_var(alloc: Allocator, to: [:0]const u8) ![]u8 {
     var res = try alloc.alloc(u8, to.len);
     for (0..to.len) |i| res[i] = to[i];
     return res;
 }
 
 test "lexed string" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const expect = std.testing.expect;
 
-    const array: [:0]const u8 = "12";
-    const l = Lexed.init(allocator, Kind.number_int, try constToVar(allocator, array));
-    defer l.deinit();
+    var arena = std.heap.DebugAllocator(.{}){};
+    defer {
+        switch (arena.deinit()) {
+            .leak => std.debug.print("memory leak", .{}),
+            .ok => {},
+        }
+    }
+    const alloc = arena.allocator();
+
+    var content = try std.ArrayList(u8).initCapacity(alloc, 2);
+    try content.appendSlice(alloc, "12");
+
+    var l = try Lexed.init(alloc, Kind.number_int, content);
+    defer {
+        l.deinit();
+        alloc.destroy(l);
+    }
 
     const expected: [:0]const u8 = "number_int(12)";
-    const expected_conv = try constToVar(allocator, expected);
-    defer allocator.free(expected_conv);
+    const got = try l.string(alloc);
+    defer alloc.free(got);
 
-    const got = try l.string(allocator);
-    defer allocator.free(got);
-
-    try expect(stringEq(got, try constToVar(allocator, expected)));
+    try expect(test_string_eq(alloc, got, expected));
 }

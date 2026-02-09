@@ -2,57 +2,57 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lexed = @import("lexed.zig");
 
-const operators = [_][]u8{"+", "-", "*", "/", "=", ">", "<", "!=", "(", ")"};
-const delimiters = [_][]u8{"\n", ";;", "|", ":", "->"};
-const keywords = [_][]u8{"let", "when"};
+const operators = [_][]const u8{ "+", "-", "*", "/", "=", ">", "<", "!=", "(", ")" };
+const delimiters = [_][]const u8{ "\n", ";;", "|", ":", "->" };
+const keywords = [_][]const u8{ "let", "when" };
 
-fn str_eq(s1: []u8, s2: []u8) bool {
-    if (s1.len != s2.len) return false;
-    for (0..s1.len) |i| {
-        if (s1[i] != s2[i]) return false;
+pub const LexerError = error{
+    InvalidSequence,
+    UnknownChar,
+};
+
+fn is_in(arr: []const []const u8, v: anytype) bool {
+    switch (@TypeOf(v)) {
+        u8 => for (arr) |it| if (it[0] == v) return true,
+        []u8 => for (arr) |it| if (std.mem.eql(u8, it, v)) return true,
+        else => unreachable,
     }
+    return false;
+}
+
+fn is_operator(v: anytype) bool {
+    return is_in(&operators, v);
+}
+
+fn is_delimiter(v: anytype) bool {
+    return is_in(&delimiters, v);
+}
+
+fn is_keyword(v: anytype) bool {
+    return is_in(&keywords, v);
+}
+
+fn is_identifier_char(v: u8) bool {
+    if (v > 'z') return false;
+    if (v > 'Z' and v != '_' and v < 'a') return false;
+    if (v < 'A') return false;
     return true;
-}
-
-fn is_operator(v: []u8) bool {
-    for (operators) |it| {
-        if (str_eq(it, v)) return true;
-    }
-    return false;
-}
-
-fn is_delimiters(v: []u8) bool {
-    for (delimiters) |it| {
-        if (str_eq(it, v)) return true;
-    }
-    return false;
-}
-
-fn is_keywords(v: []u8) bool {
-    for (keywords) |it| {
-        if (str_eq(it, v)) return true;
-    }
-    return false;
 }
 
 fn is_identifier(v: []u8) bool {
     for (v, 0..) |it, i| {
         if (i == 0 and v == '_') return false;
-        if (it > 'z') return false;
-        if (it > 'Z' and it != '_' and it < 'a') return false;
-        if (it < 'A') return false;
+        if (!is_identifier_char(it)) return false;
     }
     return true;
 }
 
 fn is_number(v: u8) bool {
-    return v <= '9' and v >= '0';
+    return v <= '9' and v >= '0' or v == '_';
 }
 
 fn is_number_int(v: []u8) bool {
-    for (v) |it| {
-        if (!is_number(it)) return false;
-    }
+    for (v) |it| if (!is_number(it)) return false;
     return true;
 }
 
@@ -69,40 +69,148 @@ fn is_number_float(v: []u8) bool {
     return true;
 }
 
-fn append(T: type, allocator: Allocator, items: *[]T, n: *usize, item: T) !void {
-    if (items.len == *n) items.* = try allocator.realloc(items, items.len*2);
-    items[n] = item;
-    n.* += 1;
+fn append(alloc: Allocator, lexeds: *std.ArrayList(*lexed.Lexed), kind: lexed.Kind, acc: *std.ArrayList(u8)) Allocator.Error!void {
+    const lx = try lexed.Lexed.init(alloc, kind, acc.*);
+    try lexeds.append(alloc, lx);
+    acc.* = try std.ArrayList(u8).initCapacity(alloc, 2);
 }
 
-fn append_lex(allocator: Allocator, lexeds: *[]lexed.Lexed, n: *usize, kind: lexed.Kind, acc: *[]u8) !void {
-    const lx = lexed.Lexed{.content = acc.*, .kind = kind};
-    try append(lexed.Lexed, allocator, lexeds, n, lx);
-    acc.* = try allocator.alloc(u8, 1);
-}
-
-fn update(allocator: Allocator, lexeds: *[]lexed.Lexed, n: *usize, acc: *[]u8) !void {
-    // determined sequence
-    if (is_operator(acc)) {
-        try append_lex(allocator, &lexeds, &n, lexed.Kind.operator, acc);
-        return;
-    } else if (is_delimiters(acc)) {
-        try append_lex(allocator, &lexeds, &n, lexed.Kind.delimiter, acc);
-        return;
+fn get_current_kind(it: u8) !lexed.Kind {
+    if (it == '.') {
+        return .number_float;
+    } else if (is_number(it)) {
+        return .number_int;
+    } else if (is_operator(it)) {
+        return .operator;
+    } else if (is_identifier_char(it)) {
+        if (is_keyword(it)) return .keyword;
+        return .identifier;
+    } else if (is_delimiter(it)) {
+        return .delimiter;
+    } else {
+        return LexerError.UnknownChar;
     }
-    // indetermined sequence
 }
 
-pub fn lex(allocator: Allocator, content: []u8) ![]lexed.Lexed {
-    var n: usize = 0;
-    var lexeds = try allocator.alloc(lexed.Lexed, 2);
+pub fn lex(alloc: Allocator, content: []u8) !std.ArrayList(*lexed.Lexed) {
+    var lexeds = try std.ArrayList(*lexed.Lexed).initCapacity(alloc, 2);
+    errdefer {
+        for (lexeds.items) |it| {
+            it.deinit();
+            alloc.destroy(it);
+        }
+        lexeds.deinit(alloc);
+    }
 
-    var size: usize = 0;
-    var acc = try allocator.alloc(u8, 2);
+    var acc = try std.ArrayList(u8).initCapacity(alloc, 2);
+    defer acc.deinit(alloc);
+
+    var current_kind = lexed.Kind.identifier;
     for (content) |it| {
-        try append(u8, allocator, &acc, &size, it);
-        update(allocator, lexeds, &n, &acc[0..size]);
+        const size = acc.items.len;
+        if (it == ' ') {
+            if (size > 0) try append(alloc, &lexeds, current_kind, &acc);
+            continue;
+        }
+        if (size > 0) {
+            var next = try acc.clone(alloc);
+            defer next.deinit(alloc);
+            try next.append(alloc, it);
+
+            switch (current_kind) {
+                .delimiter => {
+                    if (!is_delimiter(it)) {
+                        try append(alloc, &lexeds, current_kind, &acc);
+                        current_kind = try get_current_kind(it);
+                    } else if (!is_delimiter(next.items)) return LexerError.InvalidSequence;
+                },
+                .identifier => {
+                    if (!is_identifier_char(it) and (it != '_' or size == 0)) {
+                        try append(alloc, &lexeds, current_kind, &acc);
+                        current_kind = try get_current_kind(it);
+                    } else if (is_keyword(next.items)) {
+                        current_kind = .keyword;
+                    }
+                },
+                .keyword => {
+                    if (!is_keyword(next.items)) {
+                        if (is_identifier_char(it)) {
+                            current_kind = .identifier;
+                        } else {
+                            try append(alloc, &lexeds, current_kind, &acc);
+                            current_kind = try get_current_kind(it);
+                        }
+                    }
+                },
+                .operator => {
+                    if (!is_operator(it)) {
+                        try append(alloc, &lexeds, current_kind, &acc);
+                        current_kind = try get_current_kind(it);
+                    } else if (!is_operator(next.items)) return LexerError.InvalidSequence;
+                },
+                .number_int => {
+                    if (!is_number(it) and it != '.') {
+                        try append(alloc, &lexeds, current_kind, &acc);
+                        current_kind = try get_current_kind(it);
+                    } else if (!is_number_int(next.items)) {
+                        if (is_number_float(next.items)) {
+                            current_kind = .number_float;
+                        } else {
+                            return LexerError.InvalidSequence;
+                        }
+                    }
+                },
+                .number_float => {
+                    if (!is_number_float(next.items)) {
+                        if (it == '.') return LexerError.InvalidSequence;
+                        try append(alloc, &lexeds, current_kind, &acc);
+                        current_kind = try get_current_kind(it);
+                    }
+                },
+            }
+        } else {
+            current_kind = try get_current_kind(it);
+        }
+        try acc.append(alloc, it);
+    }
+    if (acc.items.len > 0) try append(alloc, &lexeds, current_kind, &acc);
+
+    return lexeds;
+}
+
+test "lexer string" {
+    const expect = std.testing.expect;
+
+    var arena = std.heap.DebugAllocator(.{}){};
+    defer _ = arena.deinit(); 
+    const alloc = arena.allocator();
+
+    const input: [:0]const u8 = "12+ x*1_2.5";
+    const input_var = try lexed.test_const_to_var(alloc, input);
+    defer alloc.free(input_var);
+    var val = try lex(alloc, input_var);
+    defer {
+        for (val.items) |it| {
+            it.deinit();
+            alloc.destroy(it);
+        }
+        val.deinit(alloc);
     }
 
-    return lexeds[0..n];
+    const got1 = try val.items[0].string(alloc);
+    defer alloc.free(got1);
+    const got2 = try val.items[1].string(alloc);
+    defer alloc.free(got2);
+    const got3 = try val.items[2].string(alloc);
+    defer alloc.free(got3);
+    const got4 = try val.items[3].string(alloc);
+    defer alloc.free(got4);
+    const got5 = try val.items[4].string(alloc);
+    defer alloc.free(got5);
+
+    try expect(lexed.test_string_eq(alloc, got1, "number_int(12)"));
+    try expect(lexed.test_string_eq(alloc, got2, "operator(+)"));
+    try expect(lexed.test_string_eq(alloc, got3, "identifier(x)"));
+    try expect(lexed.test_string_eq(alloc, got4, "operator(*)"));
+    try expect(lexed.test_string_eq(alloc, got5, "number_float(1_2.5)"));
 }
