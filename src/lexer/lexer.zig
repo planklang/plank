@@ -197,20 +197,9 @@ test "lexer string" {
         val.deinit(alloc);
     }
 
-    const got1 = try val.items[0].string(alloc);
-    defer alloc.free(got1);
-    const got2 = try val.items[1].string(alloc);
-    defer alloc.free(got2);
-    const got3 = try val.items[2].string(alloc);
-    defer alloc.free(got3);
-    const got4 = try val.items[3].string(alloc);
-    defer alloc.free(got4);
-    const got5 = try val.items[4].string(alloc);
-    defer alloc.free(got5);
-
-    try expect(lexed.test_string_eq(alloc, got1, "number_int(12)"));
-    try expect(lexed.test_string_eq(alloc, got2, "operator(+)"));
-    try expect(lexed.test_string_eq(alloc, got3, "identifier(x)"));
-    try expect(lexed.test_string_eq(alloc, got4, "operator(*)"));
-    try expect(lexed.test_string_eq(alloc, got5, "number_float(1_2.5)"));
+    try expect(val.items[0].equalsStatic(.number_int, "12"));
+    try expect(val.items[1].equalsStatic(.operator, "+"));
+    try expect(val.items[2].equalsStatic(.identifier, "x"));
+    try expect(val.items[3].equalsStatic(.operator, "*"));
+    try expect(val.items[4].equalsStatic(.number_float, "1_2.5"));
 }

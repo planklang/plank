@@ -43,6 +43,16 @@ pub const Lexed = struct {
         res[res.len - 1] = ')';
         return res;
     }
+
+    pub fn equals(self: *Self, kind: Kind, content: std.ArrayList(u8)) bool {
+        if (kind != self.kind) return false;
+        return std.mem.eql(u8, self.content.items, content.items);
+    }
+
+    pub fn equalsStatic(self: *Self, kind: Kind, content: []const u8) bool {
+        if (kind != self.kind) return false;
+        return std.mem.eql(u8, self.content.items, content);
+    }
 };
 
 pub fn kind_string(kind: Kind) []const u8 {
@@ -93,9 +103,5 @@ test "lexed string" {
         alloc.destroy(l);
     }
 
-    const expected: [:0]const u8 = "number_int(12)";
-    const got = try l.string(alloc);
-    defer alloc.free(got);
-
-    try expect(test_string_eq(alloc, got, expected));
+    try expect(l.equalsStatic(.number_int, "12"));
 }
