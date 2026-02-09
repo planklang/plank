@@ -42,14 +42,14 @@ pub const Lexed = struct {
         return res;
     }
 
-    pub fn equals(self: *Self, kind: Kind, content: std.ArrayList(u8)) bool {
+    pub fn equals(self: *Self, kind: Kind, content: anytype) bool {
         if (kind != self.kind) return false;
-        return std.mem.eql(u8, self.content.items, content.items);
-    }
-
-    pub fn equalsStatic(self: *Self, kind: Kind, content: []const u8) bool {
-        if (kind != self.kind) return false;
-        return std.mem.eql(u8, self.content.items, content);
+        var items = content;
+        switch (@TypeOf(content)) {
+            std.ArrayList(u8), *std.ArrayList(u8) => items = content.items,
+            else => {},
+        }
+        return std.mem.eql(u8, self.content.items, items);
     }
 };
 
@@ -98,5 +98,5 @@ test "lexed string" {
     var l = Lexed.init(alloc, Kind.number_int, content);
     defer l.deinit();
 
-    try expect(l.equalsStatic(.number_int, "12"));
+    try expect(l.equals(.number_int, "12"));
 }

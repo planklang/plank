@@ -216,11 +216,11 @@ test "lexer string" {
     var l = try lex(alloc, input_var);
     defer l.deinit();
 
-    try expect(l.content.items[0].equalsStatic(.number_int, "12"));
-    try expect(l.content.items[1].equalsStatic(.operator, "+"));
-    try expect(l.content.items[2].equalsStatic(.identifier, "x"));
-    try expect(l.content.items[3].equalsStatic(.operator, "*"));
-    try expect(l.content.items[4].equalsStatic(.number_float, "1_2.5"));
+    try expect(l.content.items[0].equals(.number_int, "12"));
+    try expect(l.content.items[1].equals(.operator, "+"));
+    try expect(l.content.items[2].equals(.identifier, "x"));
+    try expect(l.content.items[3].equals(.operator, "*"));
+    try expect(l.content.items[4].equals(.number_float, "1_2.5"));
 }
 
 test "lexer errors" {
