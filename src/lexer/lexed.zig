@@ -17,14 +17,12 @@ pub const Lexed = struct {
 
     const Self = @This();
 
-    pub fn init(alloc: Allocator, kind: Kind, content: std.ArrayList(u8)) !*Lexed {
-        const l = try alloc.create(Lexed);
-        l.* = Lexed{
+    pub fn init(alloc: Allocator, kind: Kind, content: std.ArrayList(u8)) Lexed {
+        return Lexed{
             .allocator = alloc,
             .kind = kind,
             .content = content,
         };
-        return l;
     }
 
     pub fn deinit(self: *Self) void {
@@ -97,11 +95,8 @@ test "lexed string" {
     var content = try std.ArrayList(u8).initCapacity(alloc, 2);
     try content.appendSlice(alloc, "12");
 
-    var l = try Lexed.init(alloc, Kind.number_int, content);
-    defer {
-        l.deinit();
-        alloc.destroy(l);
-    }
+    var l = Lexed.init(alloc, Kind.number_int, content);
+    defer l.deinit();
 
     try expect(l.equalsStatic(.number_int, "12"));
 }

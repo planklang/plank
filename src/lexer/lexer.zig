@@ -6,10 +6,14 @@ const operators = [_][]const u8{ "+", "-", "*", "/", "=", ">", "<", "!=", "(", "
 const delimiters = [_][]const u8{ "\n", ";;", "|", ":", "->" };
 const keywords = [_][]const u8{ "let", "when" };
 
-pub const LexerError = error{
+pub const LexError = error{
+    /// Sequence is composed by valid chars, but its form is invalid
     InvalidSequence,
+    /// Char is unknown
     UnknownChar,
 };
+
+pub const LexerError = Allocator.Error || LexError;
 
 fn is_in(arr: []const []const u8, v: anytype) bool {
     switch (@TypeOf(v)) {
@@ -69,13 +73,36 @@ fn is_number_float(v: []u8) bool {
     return true;
 }
 
-fn append(alloc: Allocator, lexeds: *std.ArrayList(*lexed.Lexed), kind: lexed.Kind, acc: *std.ArrayList(u8)) Allocator.Error!void {
-    const lx = try lexed.Lexed.init(alloc, kind, acc.*);
-    try lexeds.append(alloc, lx);
-    acc.* = try std.ArrayList(u8).initCapacity(alloc, 2);
-}
+pub const Lexer = struct {
+    alloc: Allocator,
+    content: std.ArrayList(*lexed.Lexed),
 
-fn get_current_kind(it: u8) !lexed.Kind {
+    const Self = @This();
+
+    pub fn init(alloc: Allocator) Allocator.Error!Lexer {
+        return Lexer{ .alloc = alloc, .content = try std.ArrayList(*lexed.Lexed).initCapacity(alloc, 2) };
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.content.items) |it| {
+            it.deinit();
+            self.alloc.destroy(it);
+        }
+        self.content.deinit(self.alloc);
+    }
+
+    pub fn append(self: *Self, lx: lexed.Lexed) Allocator.Error!void {
+        const l = try self.alloc.create(lexed.Lexed);
+        l.* = lx;
+        try self.content.append(self.alloc, l);
+    }
+
+    pub fn appendCreate(self: *Self, kind: lexed.Kind, acc: std.ArrayList(u8)) Allocator.Error!void {
+        try self.append(lexed.Lexed.init(self.alloc, kind, acc));
+    }
+};
+
+fn get_current_kind(it: u8) LexError!lexed.Kind {
     if (it == '.') {
         return .number_float;
     } else if (is_number(it)) {
@@ -88,28 +115,30 @@ fn get_current_kind(it: u8) !lexed.Kind {
     } else if (is_delimiter(it)) {
         return .delimiter;
     } else {
-        return LexerError.UnknownChar;
+        return LexError.UnknownChar;
     }
 }
 
-pub fn lex(alloc: Allocator, content: []u8) !std.ArrayList(*lexed.Lexed) {
-    var lexeds = try std.ArrayList(*lexed.Lexed).initCapacity(alloc, 2);
-    errdefer {
-        for (lexeds.items) |it| {
-            it.deinit();
-            alloc.destroy(it);
-        }
-        lexeds.deinit(alloc);
-    }
+fn append(alloc: Allocator, lexer: *Lexer, kind: lexed.Kind, acc: *std.ArrayList(u8), current: ?u8) LexerError!?lexed.Kind {
+    try lexer.appendCreate(kind, acc.*);
+    acc.* = try std.ArrayList(u8).initCapacity(alloc, 2);
+    const it = current orelse return null;
+    return try get_current_kind(it);
+}
+
+pub fn lex(alloc: Allocator, content: []u8) LexerError!Lexer {
+    var lexer = try Lexer.init(alloc);
+    errdefer lexer.deinit();
 
     var acc = try std.ArrayList(u8).initCapacity(alloc, 2);
     defer acc.deinit(alloc);
 
     var current_kind = lexed.Kind.identifier;
+
     for (content) |it| {
         const size = acc.items.len;
         if (it == ' ') {
-            if (size > 0) try append(alloc, &lexeds, current_kind, &acc);
+            if (size > 0) _ = try append(alloc, &lexer, current_kind, &acc, null);
             continue;
         }
         if (size > 0) {
@@ -120,14 +149,12 @@ pub fn lex(alloc: Allocator, content: []u8) !std.ArrayList(*lexed.Lexed) {
             switch (current_kind) {
                 .delimiter => {
                     if (!is_delimiter(it)) {
-                        try append(alloc, &lexeds, current_kind, &acc);
-                        current_kind = try get_current_kind(it);
-                    } else if (!is_delimiter(next.items)) return LexerError.InvalidSequence;
+                        current_kind = (try append(alloc, &lexer, current_kind, &acc, it)).?;
+                    } else if (!is_delimiter(next.items)) return LexError.InvalidSequence;
                 },
                 .identifier => {
                     if (!is_identifier_char(it) and (it != '_' or size == 0)) {
-                        try append(alloc, &lexeds, current_kind, &acc);
-                        current_kind = try get_current_kind(it);
+                        current_kind = (try append(alloc, &lexer, current_kind, &acc, it)).?;
                     } else if (is_keyword(next.items)) {
                         current_kind = .keyword;
                     }
@@ -137,34 +164,30 @@ pub fn lex(alloc: Allocator, content: []u8) !std.ArrayList(*lexed.Lexed) {
                         if (is_identifier_char(it)) {
                             current_kind = .identifier;
                         } else {
-                            try append(alloc, &lexeds, current_kind, &acc);
-                            current_kind = try get_current_kind(it);
+                            current_kind = (try append(alloc, &lexer, current_kind, &acc, it)).?;
                         }
                     }
                 },
                 .operator => {
                     if (!is_operator(it)) {
-                        try append(alloc, &lexeds, current_kind, &acc);
-                        current_kind = try get_current_kind(it);
-                    } else if (!is_operator(next.items)) return LexerError.InvalidSequence;
+                        current_kind = (try append(alloc, &lexer, current_kind, &acc, it)).?;
+                    } else if (!is_operator(next.items)) return LexError.InvalidSequence;
                 },
                 .number_int => {
                     if (!is_number(it) and it != '.') {
-                        try append(alloc, &lexeds, current_kind, &acc);
-                        current_kind = try get_current_kind(it);
+                        current_kind = (try append(alloc, &lexer, current_kind, &acc, it)).?;
                     } else if (!is_number_int(next.items)) {
                         if (is_number_float(next.items)) {
                             current_kind = .number_float;
                         } else {
-                            return LexerError.InvalidSequence;
+                            return LexError.InvalidSequence;
                         }
                     }
                 },
                 .number_float => {
                     if (!is_number_float(next.items)) {
-                        if (it == '.') return LexerError.InvalidSequence;
-                        try append(alloc, &lexeds, current_kind, &acc);
-                        current_kind = try get_current_kind(it);
+                        if (it == '.') return LexError.InvalidSequence;
+                        current_kind = (try append(alloc, &lexer, current_kind, &acc, it)).?;
                     }
                 },
             }
@@ -173,33 +196,55 @@ pub fn lex(alloc: Allocator, content: []u8) !std.ArrayList(*lexed.Lexed) {
         }
         try acc.append(alloc, it);
     }
-    if (acc.items.len > 0) try append(alloc, &lexeds, current_kind, &acc);
+    if (acc.items.len > 0) {
+        _ = try append(alloc, &lexer, current_kind, &acc, null);
+    }
 
-    return lexeds;
+    return lexer;
 }
 
 test "lexer string" {
     const expect = std.testing.expect;
 
     var arena = std.heap.DebugAllocator(.{}){};
-    defer _ = arena.deinit(); 
+    defer _ = arena.deinit();
     const alloc = arena.allocator();
 
     const input: [:0]const u8 = "12+ x*1_2.5";
     const input_var = try lexed.test_const_to_var(alloc, input);
     defer alloc.free(input_var);
-    var val = try lex(alloc, input_var);
-    defer {
-        for (val.items) |it| {
-            it.deinit();
-            alloc.destroy(it);
-        }
-        val.deinit(alloc);
-    }
+    var l = try lex(alloc, input_var);
+    defer l.deinit();
 
-    try expect(val.items[0].equalsStatic(.number_int, "12"));
-    try expect(val.items[1].equalsStatic(.operator, "+"));
-    try expect(val.items[2].equalsStatic(.identifier, "x"));
-    try expect(val.items[3].equalsStatic(.operator, "*"));
-    try expect(val.items[4].equalsStatic(.number_float, "1_2.5"));
+    try expect(l.content.items[0].equalsStatic(.number_int, "12"));
+    try expect(l.content.items[1].equalsStatic(.operator, "+"));
+    try expect(l.content.items[2].equalsStatic(.identifier, "x"));
+    try expect(l.content.items[3].equalsStatic(.operator, "*"));
+    try expect(l.content.items[4].equalsStatic(.number_float, "1_2.5"));
+}
+
+test "lexer errors" {
+    var arena = std.heap.DebugAllocator(.{}){};
+    defer _ = arena.deinit();
+    const alloc = arena.allocator();
+
+    const input: [:0]const u8 = "1.2.";
+    const input_var = try lexed.test_const_to_var(alloc, input);
+    defer alloc.free(input_var);
+
+    _ = lex(alloc, input_var) catch |err| switch (err) {
+        LexerError.InvalidSequence => {
+            const input2: [:0]const u8 = "hey œ :D";
+            const input2_var = try lexed.test_const_to_var(alloc, input2);
+            defer alloc.free(input2_var);
+
+            _ = lex(alloc, input2_var) catch |err2| switch (err2) {
+                LexerError.UnknownChar => return,
+                else => return err2,
+            };
+            unreachable;
+        },
+        else => return err,
+    };
+    unreachable;
 }
