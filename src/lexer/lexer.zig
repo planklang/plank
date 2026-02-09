@@ -126,7 +126,7 @@ fn append(alloc: Allocator, lexer: *Lexer, kind: lexed.Kind, acc: *std.ArrayList
     return try get_current_kind(it);
 }
 
-pub fn lex(alloc: Allocator, content: []u8) LexerError!Lexer {
+pub fn lex(alloc: Allocator, content: []const u8) LexerError!Lexer {
     var lexer = try Lexer.init(alloc);
     errdefer lexer.deinit();
 
@@ -210,10 +210,7 @@ test "lexer string" {
     defer _ = arena.deinit();
     const alloc = arena.allocator();
 
-    const input: [:0]const u8 = "12+ x*1_2.5";
-    const input_var = try lexed.test_const_to_var(alloc, input);
-    defer alloc.free(input_var);
-    var l = try lex(alloc, input_var);
+    var l = try lex(alloc, "12+ x*1_2.5");
     defer l.deinit();
 
     try expect(l.content.items[0].equals(.number_int, "12"));
@@ -228,17 +225,9 @@ test "lexer errors" {
     defer _ = arena.deinit();
     const alloc = arena.allocator();
 
-    const input: [:0]const u8 = "1.2.";
-    const input_var = try lexed.test_const_to_var(alloc, input);
-    defer alloc.free(input_var);
-
-    _ = lex(alloc, input_var) catch |err| switch (err) {
+    _ = lex(alloc, "1.2.") catch |err| switch (err) {
         LexerError.InvalidSequence => {
-            const input2: [:0]const u8 = "hey œ :D";
-            const input2_var = try lexed.test_const_to_var(alloc, input2);
-            defer alloc.free(input2_var);
-
-            _ = lex(alloc, input2_var) catch |err2| switch (err2) {
+            _ = lex(alloc, "hey œ :D") catch |err2| switch (err2) {
                 LexerError.UnknownChar => return,
                 else => return err2,
             };

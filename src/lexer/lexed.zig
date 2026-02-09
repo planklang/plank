@@ -64,22 +64,6 @@ pub fn kind_string(kind: Kind) []const u8 {
     }
 }
 
-pub fn test_string_eq(alloc: Allocator, s1: []u8, s2: [:0]const u8) bool {
-    const conv = test_const_to_var(alloc, s2) catch return false;
-    defer alloc.free(conv);
-    if (s1.len != s2.len) return false;
-    for (0..s1.len) |i| {
-        if (s1[i] != s2[i]) return false;
-    }
-    return true;
-}
-
-pub fn test_const_to_var(alloc: Allocator, to: [:0]const u8) ![]u8 {
-    var res = try alloc.alloc(u8, to.len);
-    for (0..to.len) |i| res[i] = to[i];
-    return res;
-}
-
 test "lexed string" {
     const expect = std.testing.expect;
 
